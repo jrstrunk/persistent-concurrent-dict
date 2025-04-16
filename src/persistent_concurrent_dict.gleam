@@ -1,3 +1,4 @@
+/// A concurrent dictionary, fully backed by a SQLite database on disk.
 import concurrent_dict
 import filepath
 import gleam/dynamic/decode

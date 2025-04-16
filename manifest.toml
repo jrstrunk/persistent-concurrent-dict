@@ -2,7 +2,7 @@
 # You typically do not need to edit this file
 
 packages = [
-  { name = "concurrent_dict", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_stdlib", "gtempo"], source = "git", repo = "https://github.com/jrstrunk/concurrent-dict.git", commit = "cb2f9d4da2b9b143eb84248bdc894b1f8453490c" },
+  { name = "concurrent_dict", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_stdlib", "gtempo"], source = "git", repo = "https://github.com/jrstrunk/concurrent-dict.git", commit = "27fbda91e87285305e6b06a4b33d7952ee38ca55" },
   { name = "esqlite", version = "0.8.9", build_tools = ["rebar3"], requirements = [], otp_app = "esqlite", source = "hex", outer_checksum = "465AE9AE28AE4192EA54C829FDC90C320447D439A9B2E10946621672FC6A6F8C" },
   { name = "filepath", version = "1.1.2", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "filepath", source = "hex", outer_checksum = "B06A9AF0BF10E51401D64B98E4B627F1D2E48C154967DA7AF4D0914780A6D40A" },
   { name = "gleam_erlang", version = "0.34.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_erlang", source = "hex", outer_checksum = "0C38F2A128BAA0CEF17C3000BD2097EB80634E239CE31A86400C4416A5D0FDCC" },
