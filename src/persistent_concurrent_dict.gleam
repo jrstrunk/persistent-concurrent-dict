@@ -32,7 +32,7 @@ fn handle_persist_data(msg, state: ConnectionActorState(key, val)) {
         insert_query(encoded_key, encoded_val)
         |> sqlight.exec(on: state.conn)
         |> snag.map_error(string.inspect)
-        |> snag.context("Unable to insert data")
+        |> snag.context("Unable to insert data into persist database")
 
       process.send(reply, res)
     }
@@ -61,16 +61,19 @@ pub fn build(
       filepath.directory_name(path)
       |> simplifile.create_directory_all
       |> snag.map_error(simplifile.describe_error)
+      |> snag.context("Failed to create persist directory")
   })
 
   use conn <- result.try(
     sqlight.open(path)
-    |> snag.map_error(string.inspect),
+    |> snag.map_error(string.inspect)
+    |> snag.context("Failed to open persist database at " <> path),
   )
 
   use Nil <- result.try(
     sqlight.exec(table_schema, on: conn)
-    |> snag.map_error(string.inspect),
+    |> snag.map_error(string.inspect)
+    |> snag.context("Failed to create table schema"),
   )
 
   use data_list <- result.try(
@@ -79,7 +82,8 @@ pub fn build(
       use value <- decode.field(1, decode.string)
       decode.success(#(key_decoder(key), val_decoder(value)))
     })
-    |> snag.map_error(string.inspect),
+    |> snag.map_error(string.inspect)
+    |> snag.context("Failed to select existing persist data from database"),
   )
 
   let data = concurrent_dict.from_list(data_list)
@@ -89,7 +93,8 @@ pub fn build(
       ConnectionActorState(conn:, key_encoder:, val_encoder:),
       handle_persist_data,
     )
-    |> snag.map_error(string.inspect),
+    |> snag.map_error(string.inspect)
+    |> snag.context("Failed to start connection actor"),
   )
 
   PersistentConcurrentDict(conn_actor:, data:)
@@ -116,7 +121,8 @@ pub fn insert(pcd: PersistentConcurrentDict(key, val), key, val) {
   use Nil <- result.map(
     process.try_call(pcd.conn_actor, PersistData(key, val, _), 100_000)
     |> snag.map_error(string.inspect)
-    |> result.flatten,
+    |> result.flatten
+    |> snag.context("Unable to persist data to insert"),
   )
 
   // If that succeeds, then add it to the in-memory store
