@@ -1,8 +1,10 @@
 /// A concurrent dictionary, fully backed by a SQLite database on disk.
 import concurrent_dict
 import filepath
+import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/list
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -41,9 +43,63 @@ fn handle_persist_data(msg, state: ConnectionActorState(key, val)) {
   actor.continue(state)
 }
 
+pub type SubscribersActorState(key) {
+  SubscribersActorState(
+    subscribers: List(fn() -> Nil),
+    key_subscribers: dict.Dict(key, List(fn() -> Nil)),
+  )
+}
+
+pub type SubscribersActorMsg(key) {
+  Subscribe(fn() -> Nil, process.Subject(Nil))
+  KeySubscribe(key, fn() -> Nil, process.Subject(Nil))
+  NotifySubscribers
+  NotifyKeySubscribers(key)
+}
+
+fn handle_subscribers(msg, state: SubscribersActorState(key)) {
+  case msg {
+    Subscribe(subscriber, reply) -> {
+      let subscribers = [subscriber, ..state.subscribers]
+
+      process.send(reply, Nil)
+
+      actor.continue(SubscribersActorState(..state, subscribers:))
+    }
+    KeySubscribe(key, subscriber, reply) -> {
+      let new_key_subscribers = case dict.get(state.key_subscribers, key) {
+        Ok(subscribers) -> [subscriber, ..subscribers]
+        Error(Nil) -> [subscriber]
+      }
+
+      let key_subscribers =
+        dict.insert(state.key_subscribers, key, new_key_subscribers)
+
+      process.send(reply, Nil)
+
+      actor.continue(SubscribersActorState(..state, key_subscribers:))
+    }
+    NotifySubscribers -> {
+      state.subscribers
+      |> list.each(fn(subscriber) { subscriber() })
+      actor.continue(state)
+    }
+    NotifyKeySubscribers(key) -> {
+      case dict.get(state.key_subscribers, key) {
+        Ok(subscribers) -> {
+          list.each(subscribers, fn(subscriber) { subscriber() })
+        }
+        Error(Nil) -> Nil
+      }
+      actor.continue(state)
+    }
+  }
+}
+
 pub opaque type PersistentConcurrentDict(key, val) {
   PersistentConcurrentDict(
     conn_actor: process.Subject(ConnectionActorMsg(key, val)),
+    subscribers_actor: process.Subject(SubscribersActorMsg(key)),
     data: concurrent_dict.ConcurrentDict(key, val),
   )
 }
@@ -88,7 +144,7 @@ pub fn build(
 
   let data = concurrent_dict.from_list(data_list)
 
-  use conn_actor <- result.map(
+  use conn_actor <- result.try(
     actor.start(
       ConnectionActorState(conn:, key_encoder:, val_encoder:),
       handle_persist_data,
@@ -97,7 +153,16 @@ pub fn build(
     |> snag.context("Failed to start connection actor"),
   )
 
-  PersistentConcurrentDict(conn_actor:, data:)
+  use subscribers_actor <- result.map(
+    actor.start(
+      SubscribersActorState(subscribers: [], key_subscribers: dict.new()),
+      handle_subscribers,
+    )
+    |> snag.map_error(string.inspect)
+    |> snag.context("Failed to start subscribers actor"),
+  )
+
+  PersistentConcurrentDict(conn_actor:, data:, subscribers_actor:)
 }
 
 const table_schema = "
@@ -116,6 +181,26 @@ fn insert_query(key, value) {
 
 const select_query = "SELECT key, value FROM persist"
 
+pub fn subscribe(pcd: PersistentConcurrentDict(key, val), subscriber) {
+  process.try_call(pcd.subscribers_actor, Subscribe(subscriber, _), 100_000)
+  |> snag.map_error(string.inspect)
+  |> snag.context("Unable to subscribe to persist data")
+}
+
+pub fn subscribe_to_key(
+  pcd: PersistentConcurrentDict(key, val),
+  key,
+  subscriber,
+) {
+  process.try_call(
+    pcd.subscribers_actor,
+    KeySubscribe(key, subscriber, _),
+    100_000,
+  )
+  |> snag.map_error(string.inspect)
+  |> snag.context("Unable to subscribe to persist data for key")
+}
+
 pub fn insert(pcd: PersistentConcurrentDict(key, val), key, val) {
   // First persist the data in the disk database
   use Nil <- result.map(
@@ -127,6 +212,12 @@ pub fn insert(pcd: PersistentConcurrentDict(key, val), key, val) {
 
   // If that succeeds, then add it to the in-memory store
   concurrent_dict.insert(pcd.data, key, val)
+
+  // Notify subscribers
+  process.send(pcd.subscribers_actor, NotifySubscribers)
+
+  // Notify key subscribers
+  process.send(pcd.subscribers_actor, NotifyKeySubscribers(key))
 }
 
 pub fn get(pcd: PersistentConcurrentDict(key, val), key) {
