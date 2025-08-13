@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gleam/int
 import gleam/otp/actor
+import gleam/result
 import gleeunit
 import gleeunit/should
 import persistent_concurrent_dict as pcd
@@ -48,7 +49,8 @@ pub fn subscribe_test() {
     pcd.build(":memory:", fn(x) { x }, fn(x) { x }, fn(x) { x }, fn(x) { x })
 
   let assert Ok(dep) =
-    actor.start("", fn(msg, state) {
+    actor.new("")
+    |> actor.on_message(fn(state, msg) {
       case msg {
         Set(str) -> actor.continue(str)
         Get(reply) -> {
@@ -57,20 +59,20 @@ pub fn subscribe_test() {
         }
       }
     })
+    |> actor.start
+    |> result.map(fn(actor) { actor.data })
 
-  let assert Ok(Nil) =
-    pcd.subscribe(pcd_test, fn() { process.send(dep, Set("update")) })
+  pcd.subscribe(pcd_test, fn() { process.send(dep, Set("update")) })
 
-  let assert Ok(Nil) =
-    pcd.subscribe_to_key(pcd_test, "hi", fn() {
-      process.send(dep, Set("update_key"))
-    })
+  pcd.subscribe_to_key(pcd_test, "hi", fn() {
+    process.send(dep, Set("update_key"))
+  })
 
   let assert Ok(Nil) = pcd.insert(pcd_test, "hello", "world")
 
   process.sleep(10)
 
-  let assert Ok(str) = process.try_call(dep, Get, 100_000)
+  let str = process.call(dep, 100_000, Get)
 
   should.equal(str, "update")
 
@@ -78,7 +80,7 @@ pub fn subscribe_test() {
 
   process.sleep(10)
 
-  let assert Ok(str) = process.try_call(dep, Get, 100_000)
+  let str = process.call(dep, 100_000, Get)
 
   should.equal(str, "update_key")
 }

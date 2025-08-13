@@ -24,7 +24,7 @@ pub type ConnectionActorMsg(key, val) {
   PersistData(key, val, reply: process.Subject(Result(Nil, snag.Snag)))
 }
 
-fn handle_persist_data(msg, state: ConnectionActorState(key, val)) {
+fn handle_persist_data(state: ConnectionActorState(key, val), msg) {
   case msg {
     PersistData(key, val, reply) -> {
       let encoded_key = state.key_encoder(key)
@@ -57,7 +57,7 @@ pub type SubscribersActorMsg(key) {
   NotifyKeySubscribers(key)
 }
 
-fn handle_subscribers(msg, state: SubscribersActorState(key)) {
+fn handle_subscribers(state: SubscribersActorState(key), msg) {
   case msg {
     Subscribe(subscriber, reply) -> {
       let subscribers = [subscriber, ..state.subscribers]
@@ -145,19 +145,22 @@ pub fn build(
   let data = concurrent_dict.from_list(data_list)
 
   use conn_actor <- result.try(
-    actor.start(
-      ConnectionActorState(conn:, key_encoder:, val_encoder:),
-      handle_persist_data,
-    )
+    actor.new(ConnectionActorState(conn:, key_encoder:, val_encoder:))
+    |> actor.on_message(handle_persist_data)
+    |> actor.start
+    |> result.map(fn(actor) { actor.data })
     |> snag.map_error(string.inspect)
     |> snag.context("Failed to start connection actor"),
   )
 
   use subscribers_actor <- result.map(
-    actor.start(
-      SubscribersActorState(subscribers: [], key_subscribers: dict.new()),
-      handle_subscribers,
-    )
+    actor.new(SubscribersActorState(
+      subscribers: [],
+      key_subscribers: dict.new(),
+    ))
+    |> actor.on_message(handle_subscribers)
+    |> actor.start
+    |> result.map(fn(actor) { actor.data })
     |> snag.map_error(string.inspect)
     |> snag.context("Failed to start subscribers actor"),
   )
@@ -182,9 +185,7 @@ fn insert_query(key, value) {
 const select_query = "SELECT key, value FROM persist"
 
 pub fn subscribe(pcd: PersistentConcurrentDict(key, val), subscriber) {
-  process.try_call(pcd.subscribers_actor, Subscribe(subscriber, _), 100_000)
-  |> snag.map_error(string.inspect)
-  |> snag.context("Unable to subscribe to persist data")
+  process.call(pcd.subscribers_actor, 100_000, Subscribe(subscriber, _))
 }
 
 pub fn subscribe_to_key(
@@ -192,22 +193,13 @@ pub fn subscribe_to_key(
   key,
   subscriber,
 ) {
-  process.try_call(
-    pcd.subscribers_actor,
-    KeySubscribe(key, subscriber, _),
-    100_000,
-  )
-  |> snag.map_error(string.inspect)
-  |> snag.context("Unable to subscribe to persist data for key")
+  process.call(pcd.subscribers_actor, 100_000, KeySubscribe(key, subscriber, _))
 }
 
 pub fn insert(pcd: PersistentConcurrentDict(key, val), key, val) {
   // First persist the data in the disk database
   use Nil <- result.map(
-    process.try_call(pcd.conn_actor, PersistData(key, val, _), 100_000)
-    |> snag.map_error(string.inspect)
-    |> result.flatten
-    |> snag.context("Unable to persist data to insert"),
+    process.call(pcd.conn_actor, 100_000, PersistData(key, val, _)),
   )
 
   // If that succeeds, then add it to the in-memory store

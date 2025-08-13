@@ -29,7 +29,7 @@ pub type ConnectionActorMsg(key, val) {
   GetData(key, reply: process.Subject(Result(val, snag.Snag)))
 }
 
-fn handle_persist_data(msg, state: ConnectionActorState(key, val)) {
+fn handle_persist_data(state: ConnectionActorState(key, val), msg) {
   case msg {
     PersistData(key, val, reply) -> {
       let encoded_key = state.key_encoder(key)
@@ -106,10 +106,15 @@ pub fn build(
   )
 
   use conn_actor <- result.map(
-    actor.start(
-      ConnectionActorState(conn:, key_encoder:, val_encoder:, val_decoder:),
-      handle_persist_data,
-    )
+    actor.new(ConnectionActorState(
+      conn:,
+      key_encoder:,
+      val_encoder:,
+      val_decoder:,
+    ))
+    |> actor.on_message(handle_persist_data)
+    |> actor.start
+    |> result.map(fn(actor) { actor.data })
     |> snag.map_error(string.inspect),
   )
 
@@ -141,9 +146,8 @@ pub fn insert(pcd: CacheLimitedPersistentConcurrentDict(key, val), key, val) {
   // Do not cache the inserted data, we do not know of the user will get
   // it again any time soon. We only cache the data after it is read from
   // the disk so repeat
-  process.try_call(pcd.conn_actor, PersistData(key, val, _), 100_000)
+  process.call(pcd.conn_actor, 100_000, PersistData(key, val, _))
   |> snag.map_error(string.inspect)
-  |> result.flatten
 }
 
 pub fn get(pcd: CacheLimitedPersistentConcurrentDict(key, val), key) {
@@ -151,9 +155,8 @@ pub fn get(pcd: CacheLimitedPersistentConcurrentDict(key, val), key) {
 
   // If the data is not in the cache, then try to get it from the disk
   use data <- result.try(
-    process.try_call(pcd.conn_actor, GetData(key, _), 100_000)
-    |> snag.map_error(string.inspect)
-    |> result.flatten,
+    process.call(pcd.conn_actor, 100_000, GetData(key, _))
+    |> snag.map_error(string.inspect),
   )
 
   case
